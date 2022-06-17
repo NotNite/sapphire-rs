@@ -1,0 +1,15 @@
+[package]
+name = "lobby"
+description = "The lobby server for sapphire-ts"
+authors = ["NotNite"]
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tokio = { version = "1.19.2", features = ["full"] }
+tokio-util = { version = "0.7.3", features = ["codec"] }
+color-eyre = "0.6.1"
+binrw = "0.8.4"
+md5 = "0.7.0"
