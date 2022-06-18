@@ -9,8 +9,11 @@ use tokio::{
     net::TcpStream,
 };
 
-use crate::packets::{PacketHeader, PacketRaw, PacketSegmentHeader, SegmentType};
+use crate::packets::{
+    ClientLobbyIpcType, PacketHeader, PacketRaw, PacketSegmentHeader, SegmentType,
+};
 use binrw::{BinRead, BinWrite};
+use brokefish::Brokefish;
 
 pub struct Client {
     pub stream: TcpStream,
@@ -46,8 +49,6 @@ impl Client {
         println!("{:#?}", header);
 
         for _ in 0..header.count {
-            println!("{}", size_of::<PacketHeader>());
-
             let segment_header = PacketSegmentHeader::read(&mut cursor)
                 .expect("could not parse packet segment header");
             println!("{:#?}", segment_header);
@@ -55,7 +56,6 @@ impl Client {
             let data_size =
                 (segment_header.size - (size_of::<PacketSegmentHeader>() as u32)) as usize;
             let mut data: Vec<u8> = vec![0; data_size];
-            println!("reading {}", data_size);
             cursor
                 .read_exact(&mut data)
                 .await
@@ -75,21 +75,12 @@ impl Client {
 
     async fn handle_packet(&mut self, packet: PacketRaw) -> Result<(), Box<dyn Error>> {
         // todo: store this enum in the struct
-        let segment_type = match packet.segment_header.segment_type {
-            1 => SegmentType::SessionInit,
-            3 => SegmentType::Ipc,
-            7 => SegmentType::KeepAlive,
-            9 => SegmentType::EncryptionInit,
-            _ => unreachable!(),
-        };
+        let segment_type: SegmentType = SegmentType::try_from(packet.segment_header.segment_type)
+            .expect("couldn't determine segment type");
 
         match segment_type {
             SegmentType::EncryptionInit => {
-                let key = u32::from_le_bytes(
-                    packet.data[100..104]
-                        .try_into()
-                        .expect("couldn't get enc key"),
-                );
+                let key = &packet.data[100..104];
                 let key_phrase = &packet.data[36..68];
 
                 let mut base_key: [u8; 0x2c] = [0; 0x2c];
@@ -97,15 +88,14 @@ impl Client {
                 base_key[1] = 0x56;
                 base_key[2] = 0x34;
                 base_key[3] = 0x12;
-                base_key[4..8].copy_from_slice(&key.to_le_bytes());
+                base_key[4..8].copy_from_slice(key);
 
                 // the game ver (0xD417 = 6100)
                 base_key[8] = 0xd4;
                 base_key[9] = 0x17;
-                base_key[10..42].copy_from_slice(key_phrase);
+                base_key[12..44].copy_from_slice(key_phrase);
 
                 let digest = md5::compute(base_key).to_vec();
-                println!("{:02X?}", digest);
                 self.encryption_key = Some(digest);
 
                 let mut send_data: [u8; 0x290] = [0; 0x290];
@@ -115,19 +105,33 @@ impl Client {
                     .await?;
             }
             SegmentType::Ipc => {
-                if let Some(enc_key) = &self.encryption_key {
-                    todo!()
+                let data = {
+                    if let Some(enc_key) = &self.encryption_key {
+                        let enc_data = &packet.data[0..packet.data.len() - 0x08];
+                        let bf = Brokefish::new(enc_key);
+                        let decrypted = bf.decrypt(enc_data);
+                        println!("decrypted: {:02X?}", decrypted);
+
+                        let mut data: Vec<u8> = vec![0; packet.data.len()];
+                        data[0..packet.data.len() - 0x08].copy_from_slice(&decrypted);
+
+                        data
+                    } else {
+                        packet.data
+                    }
                 };
 
-                let ipc_type = u16::from_le_bytes(
-                    packet.data[2..4]
-                        .try_into()
-                        .expect("couldn't determine IPC type"),
-                );
+                let ipc_type_num =
+                    u16::from_le_bytes(data[2..4].try_into().expect("couldn't determine IPC type"));
+                let ipc_type = ClientLobbyIpcType::try_from(ipc_type_num)
+                    .expect("couldn't determine IPC type");
 
-                println!("IPC type: {}", ipc_type);
-
-                todo!()
+                match ipc_type {
+                    ClientLobbyIpcType::ClientVersionInfo => {
+                        todo!()
+                    }
+                    _ => println!("Unknown IPC type {}", ipc_type_num),
+                }
             }
             _ => (),
         }

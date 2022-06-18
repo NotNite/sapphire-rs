@@ -1,4 +1,5 @@
 use binrw::{BinRead, BinWrite};
+use num_enum::TryFromPrimitive;
 use std::mem::size_of;
 
 #[derive(BinRead, Debug)]
@@ -25,8 +26,9 @@ pub struct PacketHeader {
     pub uncompressed_size: u32,
 }
 
-#[derive(BinRead, Debug)]
+#[derive(BinRead, Debug, TryFromPrimitive)]
 #[br(repr = u16)]
+#[repr(u16)]
 pub enum SegmentType {
     SessionInit = 1,
     Ipc = 3,
@@ -63,4 +65,15 @@ impl PacketSegmentHeader {
 pub struct PacketRaw {
     pub segment_header: PacketSegmentHeader,
     pub data: Vec<u8>,
+}
+
+#[derive(TryFromPrimitive)]
+#[repr(u16)]
+pub enum ClientLobbyIpcType {
+    ReqCharList = 0x0003,
+    ReqEnterWorld = 0x0004,
+    ClientVersionInfo = 0x0005,
+
+    ReqCharDelete = 0x000a,
+    ReqCharCreate = 0x000b,
 }
