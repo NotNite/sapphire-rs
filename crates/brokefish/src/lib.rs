@@ -90,8 +90,31 @@ impl Brokefish {
         [r, l]
     }
 
-    pub fn encrypt(&self, data: &[u8]) -> &[u8] {
-        todo!()
+    pub fn encrypt(&self, data: &[u8]) -> Vec<u8> {
+        let padded_length = if data.len() % 8 == 0 {
+            data.len()
+        } else {
+            data.len() + (8 - (data.len() % 8))
+        };
+        let mut padded_data: Vec<u8> = vec![0; padded_length];
+        padded_data[0..data.len()].copy_from_slice(data);
+
+        let mut buf: Vec<u8> = vec![0; padded_length];
+        for i in (0..padded_length).step_by(8) {
+            let mut l =
+                u32::from_le_bytes(padded_data[i..i + 4].try_into().expect("couldn't get l"));
+            let mut r = u32::from_le_bytes(
+                padded_data[i + 4..i + 8]
+                    .try_into()
+                    .expect("couldn't get r"),
+            );
+            [l, r] = self.encrypt_block([l, r]);
+
+            buf[i..i + 4].copy_from_slice(&l.to_le_bytes());
+            buf[i + 4..i + 8].copy_from_slice(&r.to_le_bytes());
+        }
+
+        buf
     }
 
     pub fn decrypt(&self, data: &[u8]) -> Vec<u8> {

@@ -1,4 +1,5 @@
 mod client;
+mod ipc;
 mod packets;
 
 use client::Client;

@@ -15,5 +15,4 @@ binrw = "0.8.4"
 md5 = "0.7.0"
 
 brokefish = { path = "../../crates/brokefish" }
-byteorder = "1.4.3"
 num_enum = "0.5.7"
