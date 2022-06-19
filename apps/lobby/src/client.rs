@@ -204,11 +204,21 @@ impl Client {
     async fn send_packet(
         &mut self,
         segment_header: PacketSegmentHeader,
-        mut data: &[u8],
+        data: &[u8],
+    ) -> Result<(), Box<dyn Error>> {
+        self.send_packets(&[(segment_header, data)]).await
+    }
+
+    async fn send_packets(
+        &mut self,
+        packets: &[(PacketSegmentHeader, &[u8])],
     ) -> Result<(), Box<dyn Error>> {
         let mut send_cursor = Cursor::new(Vec::new());
+        let mut size = size_of::<PacketHeader>();
+        for (_, data) in packets.iter() {
+            size += size_of::<PacketSegmentHeader>() + data.len();
+        }
 
-        let size = size_of::<PacketHeader>() + size_of::<PacketSegmentHeader>() + data.len();
         let packet_header = PacketHeader {
             unknown_0: 0,
             unknown_8: 0,
@@ -216,7 +226,7 @@ impl Client {
             timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64,
             size: size as u32,
             connection_type: 0,
-            count: 1,
+            count: packets.len() as u16,
 
             unknown_20: 1,
             is_compressed: 0,
@@ -227,40 +237,42 @@ impl Client {
         packet_header
             .write_to(&mut send_cursor)
             .expect("could not write packet header");
-        segment_header
-            .write_to(&mut send_cursor)
-            .expect("could not write packet segment header");
 
-        let mut packet_data_cursor = Cursor::new(Vec::new());
-        packet_data_cursor
-            .write_buf(&mut data)
-            .await
-            .expect("could not write packet data");
+        for (segment_header, mut data) in packets.iter() {
+            segment_header
+                .write_to(&mut send_cursor)
+                .expect("could not write packet segment header");
 
-        let segment_type = SegmentType::try_from(segment_header.segment_type).ok();
-
-        // TODO
-        let unencrypted_data = packet_data_cursor.get_ref();
-        if segment_type == Some(SegmentType::Ipc) && self.encryption_key.is_some() {
-            let enc_key = self.encryption_key.as_ref().unwrap();
-            println!("encrypting");
-
-            let bf = Brokefish::new(enc_key);
-            let data_to_encrypt = &unencrypted_data[0..unencrypted_data.len() - 0x10];
-            let mut enc_data: Vec<u8> = vec![0; unencrypted_data.len()];
-
-            let enc_result = &bf.encrypt(data_to_encrypt);
-            enc_data[0..enc_result.len()].copy_from_slice(enc_result);
-
-            send_cursor
-                .write_buf(&mut &enc_data[..])
-                .await
-                .expect("could not write encrypted packet data");
-        } else {
-            send_cursor
-                .write_buf(&mut &unencrypted_data[..])
+            let mut packet_data_cursor = Cursor::new(Vec::new());
+            packet_data_cursor
+                .write_buf(&mut data)
                 .await
                 .expect("could not write packet data");
+
+            let segment_type = SegmentType::try_from(segment_header.segment_type).ok();
+            let unencrypted_data = packet_data_cursor.get_ref();
+
+            // encrypt with brokefish
+            if segment_type == Some(SegmentType::Ipc) && self.encryption_key.is_some() {
+                let enc_key = self.encryption_key.as_ref().unwrap();
+
+                let bf = Brokefish::new(enc_key);
+                let data_to_encrypt = &unencrypted_data[0..unencrypted_data.len() - 0x10];
+                let mut enc_data: Vec<u8> = vec![0; unencrypted_data.len()];
+
+                let enc_result = &bf.encrypt(data_to_encrypt);
+                enc_data[0..enc_result.len()].copy_from_slice(enc_result);
+
+                send_cursor
+                    .write_buf(&mut &enc_data[..])
+                    .await
+                    .expect("could not write encrypted packet data");
+            } else {
+                send_cursor
+                    .write_buf(&mut &unencrypted_data[..])
+                    .await
+                    .expect("could not write packet data");
+            }
         }
 
         let sending = send_cursor.get_ref();
